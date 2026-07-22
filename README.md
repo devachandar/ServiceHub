@@ -12,93 +12,27 @@ Elasticsearch, React + TypeScript + Redux Toolkit + React Query + MUI.**
 
 ## Architecture
 
-```mermaid
-flowchart TB
-    Client["React · TypeScript<br/>Redux Toolkit · React Query · MUI"]
-
-    Client --> Gateway["Nginx API Gateway<br/><sub>routing · rate limiting · CORS · WS upgrade</sub>"]
-
-    subgraph Core["Core marketplace services"]
-        direction LR
-        Auth["Auth Service<br/><sub>:8001</sub>"]
-        User["User Service<br/><sub>:8002</sub>"]
-        Provider["Provider Service<br/><sub>:8003</sub>"]
-        Booking["Booking Service<br/><sub>:8004</sub>"]
-        Review["Review Service<br/><sub>:8005</sub>"]
-        Payment["Payment Service<br/><sub>:8006</sub>"]
-    end
-
-    subgraph Support["Search, realtime & support services"]
-        direction LR
-        Search["Search Service<br/><sub>:8007</sub>"]
-        Chat["Chat Service<br/><sub>:8008 · WebSocket</sub>"]
-        Media["Media Service<br/><sub>:8009</sub>"]
-        Analytics["Analytics Service<br/><sub>:8010</sub>"]
-        Notify["Notification Service<br/><sub>:8011</sub>"]
-    end
-
-    Gateway -->|/api/auth| Auth
-    Gateway -->|/api/users| User
-    Gateway -->|/api/providers| Provider
-    Gateway -->|/api/bookings| Booking
-    Gateway -->|/api/reviews| Review
-    Gateway -->|/api/payments| Payment
-    Gateway -->|/api/search| Search
-    Gateway -->|/ws/chat, /api/chat| Chat
-    Gateway -->|/api/media| Media
-    Gateway -->|/api/analytics| Analytics
-
-    Auth -.->|"verifies provider"| Provider
-    Booking -.->|"reads working hours"| Provider
-    Review -.->|"validates booking, updates rating"| Booking
-    Review -.->|"updates rating"| Provider
-
-    Auth --> AuthDB[("auth_db")]
-    User --> UserDB[("user_db")]
-    Provider --> ProviderDB[("provider_db")]
-    Booking --> BookingDB[("booking_db")]
-    Review --> ReviewDB[("review_db")]
-    Payment --> PaymentDB[("payment_db")]
-    Analytics --> AnalyticsDB[("analytics_db")]
-    Chat --> ChatDB[("chat_db")]
-    Search --> ES[("Elasticsearch")]
-    Media --> Store[("local disk / S3")]
-    Notify --> Mail[["SMTP or console"]]
-
-    classDef svc fill:#0F5E56,stroke:#0A423C,color:#fff
-    classDef store fill:#F7F8F7,stroke:#5B655F,color:#1B1F1E
-    class Auth,User,Provider,Booking,Review,Payment,Search,Chat,Media,Analytics,Notify svc
-    class AuthDB,UserDB,ProviderDB,BookingDB,ReviewDB,PaymentDB,AnalyticsDB,ChatDB,ES,Store,Mail store
 ```
+React (TS, Redux Toolkit, React Query, MUI)
+            │
+            ▼
+   Nginx API Gateway  ──/api/auth────────► Auth Service ─────────► Postgres (auth_db)
+            │           ──/api/users───────► User Service ──────────► Postgres (user_db)
+            │           ──/api/providers──► Provider Service ──────► Postgres (provider_db)
+            │           ──/api/bookings───► Booking Service ───────► Postgres (booking_db)
+            │           ──/api/reviews────► Review Service ────────► Postgres (review_db)
+            │           ──/api/payments───► Payment Service ───────► Postgres (payment_db)
+            │           ──/api/search─────► Search Service ────────► Elasticsearch
+            │           ──/api/media──────► Media Service ─────────► local disk / S3
+            │           ──/api/analytics──► Analytics Service ─────► Postgres (analytics_db)
+            │           ──/api/chat & /ws/chat──► Chat Service (Django Channels) ─► Postgres (chat_db)
+            │
+            └── (async) Notification Service ─► email (SMTP or console)
 
-Dotted arrows above are the only direct service-to-service HTTP calls in the
-system (e.g. Booking Service reading a provider's schedule). Everything
-else - the stuff that looks like it should be a direct call, like "email
-the customer when payment succeeds" - goes through the event bus instead,
-so no service ever needs to know who's listening:
-
-```mermaid
-sequenceDiagram
-    participant B as Booking Service
-    participant R as Redis Pub/Sub
-    participant P as Payment Service
-    participant N as Notification Service
-    participant An as Analytics Service
-
-    B->>R: publish BookingCreated
-    par fan-out, each subscriber independent
-        R-->>P: BookingCreated
-        R-->>N: BookingCreated
-        R-->>An: BookingCreated
-    end
-    P->>P: listen_events → create_invoice_task.delay() (Celery/RabbitMQ, retries)
-    N->>N: listen_events → send_email_task.delay() (Celery/RabbitMQ, retries)
-    An->>An: listen_events → increment today's counters (no Celery needed)
+Events (Redis Pub/Sub): UserRegistered · ProviderCreated/Updated/Verified ·
+BookingCreated/Cancelled/Completed/Rescheduled · PaymentCaptured ·
+ReviewCreated
 ```
-
-Full event catalog: `UserRegistered` · `ProviderCreated/Updated/Verified` ·
-`BookingCreated/Cancelled/Completed/Rescheduled` · `PaymentCaptured` ·
-`ReviewCreated`.
 
 ### The two-layer async design
 
